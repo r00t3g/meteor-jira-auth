@@ -3,12 +3,13 @@
 
 JiraAuth = {};
 
-var serviceName = 'jira';
+const serviceName = 'jira';
+
 Accounts.oauth.registerService(serviceName);
 
-Meteor.loginWithJira = function(options, callback) {
-    // support a callback without options
-    if (! callback && typeof options === "function") {
+Meteor.loginWithJira = function (options, callback) {
+
+    if (!callback && typeof options === "function") {
         callback = options;
         options = null;
     }
@@ -17,29 +18,34 @@ Meteor.loginWithJira = function(options, callback) {
     JiraAuth.requestCredential(options, credentialRequestCompleteCallback);
 };
 
-JiraAuth.requestCredential = function(options, credentialRequestCompleteCallback) {
-    // support both (options, callback) and (callback).
+JiraAuth.requestCredential = function (options, credentialRequestCompleteCallback) {
+
     if (!credentialRequestCompleteCallback && typeof options === 'function') {
         credentialRequestCompleteCallback = options;
         options = {};
     }
 
-    var config = ServiceConfiguration.configurations.findOne({service: serviceName});
+    let config = ServiceConfiguration.configurations.findOne({service: serviceName});
+
     if (!config) {
-        if(credentialRequestCompleteCallback) {
+        if (credentialRequestCompleteCallback) {
             credentialRequestCompleteCallback(new ServiceConfiguration.ConfigError());
         }
         return;
     }
 
-    var credentialToken = Random.secret();
-    var loginStyle = OAuth._loginStyle(serviceName, config, options);
-    var stateParam = OAuth._stateParam(loginStyle, credentialToken);
+    let
+        credentialToken = Random.secret(),
+        loginStyle = OAuth._loginStyle(serviceName, config, options),
+        stateParam = OAuth._stateParam(loginStyle, credentialToken),
 
-    // url to app, caught in `server.js`
-    var loginPath = '_oauth/' + serviceName + '/?requestTokenAndRedirect=true' +
-                    '&state=' + stateParam +
-                    '&jiraHost=' + options.jiraHost;
+        loginPath = [
+            '_oauth/', serviceName, '/?requestTokenAndRedirect=true',
+            '&state=', stateParam,
+            '&jiraHost=', options.jiraHost,
+            '&jiraPort=', options.jiraPort,
+            '&jiraProtocol=', options.jiraProtocol
+        ].join("");
 
     if (Meteor.isCordova) {
         loginPath = loginPath + "&cordova=true";
@@ -48,13 +54,15 @@ JiraAuth.requestCredential = function(options, credentialRequestCompleteCallback
         }
     }
 
-    var loginUrl = Meteor.absoluteUrl(loginPath);
+    let loginUrl = Meteor.absoluteUrl(loginPath);
 
-    OAuth.launchLogin({
-        loginService: serviceName,
-        loginStyle: loginStyle,
-        loginUrl: loginUrl,
-        credentialRequestCompleteCallback: credentialRequestCompleteCallback,
-        credentialToken: credentialToken
-    });
+    OAuth.launchLogin(
+        {
+            loginService: serviceName,
+            loginStyle: loginStyle,
+            loginUrl: loginUrl,
+            credentialRequestCompleteCallback: credentialRequestCompleteCallback,
+            credentialToken: credentialToken
+        }
+    );
 };

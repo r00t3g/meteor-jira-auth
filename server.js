@@ -1,40 +1,44 @@
 /* global OAuth, ServiceConfiguration, Meteor, HTTP, _, Accounts, Npm, Random */
 "use strict";
 
-var JiraClient = Npm.require('jira-connector');
+const JiraClient = Npm.require('jira-connector');
+const getAuthorizeURL = Meteor.wrapAsync(JiraClient.oauth_util.getAuthorizeURL, JiraClient.oauth_util);
+const swapRequestTokenWithAccessToken = Meteor.wrapAsync(JiraClient.oauth_util.swapRequestTokenWithAccessToken, JiraClient.oauth_util);
 
-var getAuthorizeURL = Meteor.wrapAsync(JiraClient.oauth_util.getAuthorizeURL, JiraClient.oauth_util),
-    swapRequestTokenWithAccessToken = Meteor.wrapAsync(JiraClient.oauth_util.swapRequestTokenWithAccessToken, JiraClient.oauth_util);
-
-Accounts.addAutopublishFields({
-    forLoggedInUser: ['services.jira'],
-    forOtherUsers: [
-    ]
-});
+Accounts.addAutopublishFields(
+    {
+        forLoggedInUser: ['services.jira'],
+        forOtherUsers: []
+    }
+);
 
 Accounts.oauth.registerService("jira");
-OAuth.registerService("jira", "1.0-jira", {}, function handleOauthRequest(oauthInfo, options) {
-    var jiraClient = new JiraClient({
-        host: oauthInfo.host,
-        oauth: {
-            consumer_key: oauthInfo.consumerKey,
-            private_key: oauthInfo.privateKey,
-            token: oauthInfo.accessToken,
-            token_secret: oauthInfo.accessTokenSecret
-        }
-    });
+OAuth.registerService("jira", "1.0-jira", {}, (oauthInfo, options) => {
 
-    var myself = Meteor.wrapAsync(jiraClient.myself.getMyself, jiraClient.myself)({});
-
-    var serviceData = {
-        id: oauthInfo.host + "::" + myself.key,
-        username: myself.name,
-        name: myself.displayName,
-        email: myself.emailAddress,
-        host: oauthInfo.host,
-        accessToken: OAuth.sealSecret(oauthInfo.accessToken),
-        accessTokenSecret: OAuth.sealSecret(oauthInfo.accessTokenSecret)
-    };
+    let
+        jiraClient = new JiraClient({
+            host: oauthInfo.host,
+            port: oauthInfo.port,
+            protocol: oauthInfo.protocol,
+            oauth: {
+                consumer_key: oauthInfo.consumerKey,
+                private_key: oauthInfo.privateKey,
+                token: oauthInfo.accessToken,
+                token_secret: oauthInfo.accessTokenSecret
+            }
+        }),
+        myself = Meteor.wrapAsync(jiraClient.myself.getMyself, jiraClient.myself)({}),
+        serviceData = {
+            id: oauthInfo.host + "::" + myself.key,
+            username: myself.name,
+            name: myself.displayName,
+            email: myself.emailAddress,
+            host: oauthInfo.host,
+            port: oauthInfo.port,
+            protocol: oauthInfo.protocol,
+            accessToken: OAuth.sealSecret(oauthInfo.accessToken),
+            accessTokenSecret: OAuth.sealSecret(oauthInfo.accessTokenSecret)
+        };
 
     return {
         serviceData: serviceData,
@@ -47,33 +51,42 @@ OAuth.registerService("jira", "1.0-jira", {}, function handleOauthRequest(oauthI
     };
 });
 
+OAuth._requestHandlers['1.0-jira'] = (service, query, res) => {
 
-OAuth._requestHandlers['1.0-jira'] = function(service, query, res) {
-    var config = ServiceConfiguration.configurations.findOne({service: service.serviceName});
-    if (!config) {
-        throw new ServiceConfiguration.ConfigError(service.serviceName);
-    }
+    let
+        config = ServiceConfiguration.configurations.findOne({service: service.serviceName}),
+        credentialSecret,
+        oauthResponse;
 
-    var credentialSecret, oauthResponse;
+    if (!config) throw new ServiceConfiguration.ConfigError(service.serviceName);
 
     if (query.requestTokenAndRedirect) {
-        // step 1 - get and store a request token
 
-        var callbackUrl = OAuth._redirectUri(service.serviceName, config, {
-            state: query.state,
-            jiraHost: query.jiraHost || config.jiraHost,
-            cordova: (query.cordova === "true"),
-            android: (query.android === "true")
-        });
-
-        oauthResponse = getAuthorizeURL({
-            host: query.jiraHost || config.jiraHost,
-            oauth: {
-                consumer_key: config.consumerKey,
-                private_key: config.privateKey,
-                callback_url: callbackUrl
+        var callbackUrl = OAuth._redirectUri(
+            service.serviceName,
+            config,
+            {
+                state: query.state,
+                jiraHost: query.jiraHost || config.jiraHost,
+                jiraPort: query.jiraPort || config.jiraPort,
+                jiraProtocol: query.jiraProtocol || config.jiraProtocol,
+                cordova: (query.cordova === "true"),
+                android: (query.android === "true")
             }
-        });
+        );
+
+        oauthResponse = getAuthorizeURL(
+            {
+                host: query.jiraHost || config.jiraHost,
+                port: query.jiraPort || config.jiraPort,
+                protocol: query.jiraProtocol || config.jiraProtocol,
+                oauth: {
+                    consumer_key: config.consumerKey,
+                    private_key: config.privateKey,
+                    callback_url: callbackUrl
+                }
+            }
+        );
 
         // Keep track of request token so we can verify it on the next step
         OAuth._storeRequestToken(
@@ -84,51 +97,46 @@ OAuth._requestHandlers['1.0-jira'] = function(service, query, res) {
 
         res.writeHead(302, {'Location': oauthResponse.url});
         res.end();
+
     } else {
-        // step 2, redirected from provider login - store the result
-        // and close the window to allow the login handler to proceed
 
-        // Get the user's request token so we can verify it and clear it
-        var requestTokenInfo = OAuth._retrieveRequestToken(OAuth._credentialTokenFromQuery(query));
+        let requestTokenInfo = OAuth._retrieveRequestToken(OAuth._credentialTokenFromQuery(query));
 
-        if (! requestTokenInfo) {
-            throw new Error("Unable to retrieve request token");
-        }
+        if (!requestTokenInfo) throw new Error("Unable to retrieve request token");
 
-        // Verify user authorized access and the oauth_token matches
-        // the requestToken from previous step
         if (query.oauth_token && query.oauth_token === requestTokenInfo.requestToken) {
 
-            // Prepare the login results before returning.  This way the
-            // subsequent call to the `login` method will be immediate.
+            let
+                accessToken = swapRequestTokenWithAccessToken(
+                    {
+                        host: query.jiraHost || config.jiraHost,
+                        port: query.jiraPort || config.jiraPort,
+                        protocol: query.jiraProtocol || config.jiraProtocol,
+                        oauth: {
+                            consumer_key: config.consumerKey,
+                            private_key: config.privateKey,
+                            token: requestTokenInfo.requestToken,
+                            token_secret: requestTokenInfo.requestTokenSecret,
+                            oauth_verifier: query.oauth_verifier
+                        }
+                    }
+                ),
+                oauthResult = service.handleOauthRequest(
+                    {
+                        host: query.jiraHost || config.jiraHost,
+                        port: query.jiraPort || config.jiraPort,
+                        protocol: query.jiraProtocol || config.jiraProtocol,
+                        consumerKey: config.consumerKey,
+                        privateKey: config.privateKey,
+                        accessToken: accessToken,
+                        accessTokenSecret: requestTokenInfo.requestTokenSecret
+                    },
+                    {query: query}
+                ),
+                credentialToken = OAuth._credentialTokenFromQuery(query);
 
-            // Get the access token for signing requests
-
-            var accessToken = swapRequestTokenWithAccessToken({
-                host: query.jiraHost || config.jiraHost,
-                oauth: {
-                    consumer_key: config.consumerKey,
-                    private_key: config.privateKey,
-                    token: requestTokenInfo.requestToken,
-                    token_secret: requestTokenInfo.requestTokenSecret,
-                    oauth_verifier: query.oauth_verifier
-                }
-            });
-
-            // Run service-specific handler.
-            var oauthResult = service.handleOauthRequest({
-                host: query.jiraHost || config.jiraHost,
-                consumerKey: config.consumerKey,
-                privateKey: config.privateKey,
-                accessToken: accessToken,
-                accessTokenSecret: requestTokenInfo.requestTokenSecret
-            }, { query: query });
-
-            var credentialToken = OAuth._credentialTokenFromQuery(query);
             credentialSecret = Random.secret();
 
-            // Store the login result so it can be retrieved in another
-            // browser tab by the result handler
             OAuth._storePendingCredential(credentialToken, {
                 serviceName: service.serviceName,
                 serviceData: oauthResult.serviceData,
@@ -136,8 +144,6 @@ OAuth._requestHandlers['1.0-jira'] = function(service, query, res) {
             }, credentialSecret);
         }
 
-        // Either close the window, redirect, or render nothing
-        // if all else fails
         OAuth._renderOauthResults(res, query, credentialSecret);
     }
 
