@@ -17,6 +17,7 @@ Package.onUse(function(api) {
     api.versionsFrom('1.2.0.1');
 
     api.use([
+        'ecmascript',
         'oauth',
         'oauth1',
         'underscore',
