@@ -2,7 +2,7 @@
 "use strict";
 
 Package.describe({
-    name: 'r00t3g:jira-auth',
+    name: 'r00t3g:accounts-jira',
     version: '0.0.6',
     summary: 'Authenticate to a remote JIRA instance (forked from optilude:jira-auth)',
     git: 'https://github.com/r00t3g/meteor-jira-auth',
